@@ -1,0 +1,632 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>CloverShell v1.1</title>
+    
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <style>
+        /* Definisi Tema Warna */
+        :root, body.theme-default {
+            --bg-color: #0a0a0a; --text-color: #ffffff; --prompt-color: #00ff41;
+            --error-color: #ff3333; --warn-color: #ffcc00; --info-color: #00ccff;
+            --system-color: #666; --success-color: #00ff41; --folder-color: #00ccff;
+            --shadow-color: #003300; --scrollbar-thumb: #004400; --scrollbar-track: #000;
+        }
+        body.theme-light {
+            --bg-color: #f0f0f0; --text-color: #1a1a1a; --prompt-color: #008800;
+            --error-color: #dd0000; --warn-color: #cc8800; --info-color: #0055cc;
+            --system-color: #888; --success-color: #008800; --folder-color: #0055cc;
+            --shadow-color: rgba(0,0,0,0); --scrollbar-thumb: #aaa; --scrollbar-track: #f0f0f0;
+        }
+        body.theme-matrix {
+            --bg-color: #000; --text-color: #00ff00; --prompt-color: #00ff00;
+            --error-color: #ff0000; --warn-color: #ffff00; --info-color: #00ff00;
+            --system-color: #008800; --success-color: #00ff00; --folder-color: #00ff00;
+            --shadow-color: #003300; --scrollbar-thumb: #00ff00; --scrollbar-track: #000;
+        }
+        
+        /* Style Dasar Terminal */
+        body {
+            background-color: var(--bg-color); color: var(--text-color);
+            font-family: 'Fira Code', monospace; overflow: hidden; margin: 0;
+            height: 100vh; width: 100vw; text-shadow: 0 0 2px var(--shadow-color);
+            transition: background-color 0.3s, color 0.3s;
+        }
+        .crt-overlay {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.25) 50%), 
+                        linear-gradient(90deg, rgba(255, 0, 0, 0.06), rgba(0, 255, 0, 0.02), rgba(0, 0, 255, 0.06));
+            background-size: 100% 2px, 3px 100%;
+            pointer-events: none; z-index: 10;
+        }
+        #terminal {
+            height: 100%; width: 100%; padding: 15px;
+            overflow-y: auto; box-sizing: border-box; padding-bottom: 60px;
+            scrollbar-width: thin;
+            scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
+        }
+        #terminal::-webkit-scrollbar { width: 8px; }
+        #terminal::-webkit-scrollbar-track { background: var(--scrollbar-track); }
+        #terminal::-webkit-scrollbar-thumb { background: var(--scrollbar-thumb); border-radius: 4px; }
+        
+        /* Kelas Warna Output */
+        .text-cmd { color: var(--text-color); font-weight: bold; }
+        .text-error { color: var(--error-color); }
+        .text-warn { color: var(--warn-color); }
+        .text-info { color: var(--info-color); }
+        .text-system { color: var(--system-color); font-style: italic; }
+        .text-success { color: var(--success-color); font-weight: bold; }
+        .text-folder { color: var(--folder-color); font-weight: bold; }
+        .input-line { display: flex; align-items: center; margin-top: 5px; }
+        .prompt {
+            color: var(--prompt-color); margin-right: 8px; white-space: nowrap;
+            font-weight: 600; user-select: none;
+        }
+        #cmd-input {
+            background: transparent; border: none; color: var(--text-color);
+            font-family: 'Fira Code', monospace; font-size: 16px;
+            flex-grow: 1; outline: none; caret-color: var(--prompt-color);
+            padding: 0; margin: 0;
+        }
+    </style>
+</head>
+<body class="theme-default">
+
+    <div class="crt-overlay"></div>
+    <div id="terminal" onclick="focusInput()">
+        <div id="output"></div>
+        <div class="input-line">
+            <span id="prompt" class="prompt"></span>
+            <input type="text" id="cmd-input" autocomplete="off" spellcheck="false">
+        </div>
+    </div>
+
+    <script>
+        /**
+         * CLOVERSHELL SYSTEM CODE v1.1 (Finalized Build)
+         */
+
+        // --- 1. KONFIGURASI & STATE ---
+        const terminalDiv = document.getElementById('terminal');
+        const outputDiv = document.getElementById('output');
+        const inputField = document.getElementById('cmd-input');
+        const promptLabel = document.getElementById('prompt');
+        const bootTime = new Date(); 
+
+        let commandHistory = [];
+        let historyIndex = -1;
+        let sudoMode = false; 
+        let aliases = { 
+            'c': 'cls',
+            'la': 'ls'
+        };
+
+        // --- 2. VIRTUAL FILE SYSTEM (VFS) ---
+        let fileSystem = {
+            "home": {
+                "user": {
+                    "notes": {
+                        "todo.txt": "1. Hack NASA\n2. Beli Susu\n3. Tidur",
+                        "password.txt": "admin123 (Jangan disebar!)"
+                    },
+                    "downloads": {
+                        "image.jpg": "(Binary data)",
+                        "document.pdf": "(Binary data)"
+                    },
+                    "readme.txt": "Selamat datang di CloverShell v1.1.\nKetik 'help' untuk melihat daftar perintah."
+                }
+            },
+            "system": {
+                "logs": {
+                    "boot.log": "System started successfully at " + bootTime.toLocaleTimeString(),
+                    "security.log": "No threats detected."
+                },
+                "config.sys": "BATTERY_OPTIMIZATION=TRUE\nNETWORK_SCAN=ENABLED"
+            }
+        };
+
+        let currentPath = ["home", "user"];
+
+        // --- 3. FUNGSI UTAMA (HELPER) ---
+        function focusInput() { inputField.focus(); }
+        window.onload = function() {
+            focusInput();
+            bootSequence(); 
+            getGpuInfo();
+        };
+
+        function print(text, type = '') {
+            const div = document.createElement('div');
+            div.className = type; 
+            div.innerHTML = text.replace(/\n/g, '<br>');
+            outputDiv.appendChild(div);
+            scrollToBottom();
+        }
+
+        function scrollToBottom() { terminalDiv.scrollTop = terminalDiv.scrollHeight; }
+
+        function getCurrentDirObj() {
+            let curr = fileSystem;
+            for (let folder of currentPath) {
+                if (curr[folder]) { curr = curr[folder]; } 
+                else { return null; }
+            }
+            return curr;
+        }
+
+        // FUNGSI PROMPT (SUDAH DIPERBAIKI)
+        function updatePromptLabel() {
+            const pathStr = "/" + currentPath.join("/");
+            const promptChar = sudoMode ? "#" : "$";
+            
+            // HANYA MENAMPILKAN PATH, BUKAN user@clover:
+            promptLabel.innerText = `${pathStr}${promptChar}`;
+        }
+
+        function searchVFS(query) {
+            let results = [];
+            function recurse(currentDir, path) {
+                for (const item in currentDir) {
+                    const itemPath = path + "/" + item;
+                    let match = false;
+                    if (query.startsWith('*.')) {
+                        if (item.endsWith(query.substring(1))) match = true;
+                    } else {
+                        if (item.includes(query)) match = true;
+                    }
+                    if (match) results.push(itemPath);
+                    if (typeof currentDir[item] === 'object') {
+                        recurse(currentDir[item], itemPath);
+                    }
+                }
+            }
+            recurse(fileSystem, "");
+            return results;
+        }
+
+        let gpuInfo = "Detecting...";
+        function getGpuInfo() {
+            try {
+                const canvas = document.createElement('canvas');
+                const gl = canvas.getContext('webgl') || canvas.getContext('experimental-webgl');
+                if (gl) {
+                    const debugInfo = gl.getExtension('WEBGL_debug_renderer_info');
+                    gpuInfo = debugInfo ? gl.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL) : "N/A";
+                }
+            } catch (e) { gpuInfo = "N/A"; }
+        }
+
+        // --- 4. DAFTAR PERINTAH (COMMANDS) ---
+        const commands = {
+            'help': {
+                desc: 'Menampilkan bantuan',
+                run: () => {
+                    print("=== CLOVERSHELL V1.1 COMMAND LIST ===", "text-info");
+                    print(" FILE OPS:", "text-warn");
+                    print("  ls             - List file & folder");
+                    print("  cd [folder]    - Pindah direktori (.. untuk kembali)");
+                    print("  cat [file]     - Baca isi file");
+                    print("  touch [file]   - Buat file baru");
+                    print("  write [file] [isi] - Tulis ke file");
+                    print("  mkdir [folder] - Buat folder baru");
+                    print("  rm [file]      - Hapus file (butuh sudo di /system)");
+                    print("  mv [asal] [tuj]- Pindahkan/Rename file");
+                    print("  find [nama/*ext] - Cari file di VFS");
+                    print("");
+                    print(" SYSTEM & HARDWARE:", "text-warn");
+                    print("  ip             - Cek IP Address (Public IP Asli)");
+                    print("  net            - Scan Jaringan WiFi (Simulasi)");
+                    print("  batt           - Cek Baterai (Data Asli)");
+                    print("  time           - Cek Waktu");
+                    print("  temp           - Cek Suhu (Simulasi Sensor)");
+                    print("  apps           - Cek Versi Aplikasi");
+                    print("  top            - Cek proses & resource (Simulasi)");
+                    print("  neofetch       - Tampilkan info sistem");
+                    print("  ping [host]    - Simulasi ping ke host");
+                    print("");
+                    print(" TERMINAL & SETTINGS:", "text-warn");
+                    print("  cls            - Bersihkan layar");
+                    print("  history        - (Gunakan Panah Atas/Bawah)");
+                    print("  sudo [on/off]  - Aktifkan mode admin");
+                    print("  alias          - Tampilkan/set alias");
+                    print("  theme [nama]   - Ubah tema (default, light, matrix)");
+                }
+            },
+            'cls': { run: () => outputDiv.innerHTML = '' },
+            'clear': { run: () => outputDiv.innerHTML = '' },
+            'ls': {
+                run: () => {
+                    const dir = getCurrentDirObj();
+                    if (!dir) return print("Error: Path tidak valid.", "text-error");
+                    let output = [];
+                    const keys = Object.keys(dir).sort();
+                    if(keys.length === 0) return print("(Direktori Kosong)", "text-system");
+                    keys.forEach(key => {
+                        if (typeof dir[key] === 'object') {
+                            output.push(`<span class="text-folder">${key}/</span>`);
+                        } else {
+                            output.push(key);
+                        }
+                    });
+                    print(output.join("&nbsp;&nbsp;&nbsp;"));
+                }
+            },
+            'cd': { 
+                run: (args) => {
+                    if (!args[0]) return print("Usage: cd [folder] atau cd ..", "text-warn");
+                    if (args[0] === "..") {
+                        if (currentPath.length > 0) currentPath.pop();
+                    } else {
+                        const target = args[0];
+                        const currentDir = getCurrentDirObj();
+                        if (currentDir[target] && typeof currentDir[target] === 'object') {
+                            currentPath.push(target);
+                        } else {
+                            print(`cd: ${target}: Tidak ditemukan atau bukan direktori`, "text-error");
+                        }
+                    }
+                    updatePromptLabel();
+                }
+            },
+            'cat': { 
+                run: (args) => {
+                    if(!args[0]) return print("Usage: cat [namafile]", "text-warn");
+                    const dir = getCurrentDirObj();
+                    const content = dir[args[0]];
+                    if (content === undefined) print("File tidak ditemukan.", "text-error");
+                    else if (typeof content === 'object') print("Error: Ini adalah folder.", "text-error");
+                    else print(content);
+                }
+            },
+            'touch': { 
+                run: (args) => {
+                    if(!args[0]) return print("Usage: touch [namafile]", "text-warn");
+                    const dir = getCurrentDirObj();
+                    if(dir[args[0]]) return print("File sudah ada.", "text-warn");
+                    dir[args[0]] = ""; 
+                    print(`File ${args[0]} dibuat.`, "text-success");
+                }
+            },
+            'write': { 
+                run: (args) => {
+                    if(args.length < 2) return print("Usage: write [file] [text...]", "text-warn");
+                    const filename = args[0];
+                    const text = args.slice(1).join(" ");
+                    const dir = getCurrentDirObj();
+                    if(typeof dir[filename] === 'object') return print("Tidak bisa menulis ke folder.", "text-error");
+                    dir[filename] = text;
+                    print(`Berhasil menulis ke ${filename}.`, "text-success");
+                }
+            },
+            'mkdir': { 
+                run: (args) => {
+                    if(!args[0]) return print("Usage: mkdir [namafolder]", "text-warn");
+                    const dir = getCurrentDirObj();
+                    if(dir[args[0]]) return print("Folder sudah ada.", "text-warn");
+                    dir[args[0]] = {};
+                    print(`Folder ${args[0]} dibuat.`, "text-success");
+                }
+            },
+            'rm': {
+                run: (args) => {
+                    if(!args[0]) return print("Usage: rm [namafile]", "text-warn");
+                    if (currentPath[0] === 'system' && !sudoMode) {
+                        return print("rm: Permission denied. Butuh akses root di /system.", "text-error");
+                    }
+                    const dir = getCurrentDirObj();
+                    if(!dir[args[0]]) return print("File tidak ditemukan.", "text-error");
+                    delete dir[args[0]];
+                    print(`${args[0]} dihapus.`, "text-system");
+                }
+            },
+            'mv': { 
+                run: (args) => {
+                    if(args.length < 2) return print("Usage: mv [asal] [tujuan]", "text-warn");
+                    const src = args[0];
+                    const dest = args[1];
+                    const dir = getCurrentDirObj();
+                    if(!dir[src]) return print("File asal tidak ditemukan.", "text-error");
+                    if (dir[dest] && typeof dir[dest] === 'object') {
+                        dir[dest][src] = dir[src];
+                        delete dir[src];
+                        print(`Dipindahkan ke folder ${dest}/`, "text-success");
+                    } else {
+                        dir[dest] = dir[src];
+                        delete dir[src];
+                        print(`Rename ${src} -> ${dest}`, "text-success");
+                    }
+                }
+            },
+            'find': {
+                run: (args) => {
+                    if(!args[0]) return print("Usage: find [filename] atau [*.ext]", "text-warn");
+                    print(`Mencari VFS untuk '${args[0]}'...`, "text-system");
+                    const results = searchVFS(args[0]);
+                    if(results.length === 0) {
+                        print("Tidak ada hasil.", "text-system");
+                    } else {
+                        print(results.join("\n"));
+                    }
+                }
+            },
+            'ping': {
+                run: (args) => {
+                    if(!args[0]) return print("Usage: ping [host]", "text-warn");
+                    const host = args[0];
+                    print(`PING ${host} (simulasi):`, "text-info");
+                    let count = 0;
+                    const interval = setInterval(() => {
+                        if (count >= 4) { clearInterval(interval); return; }
+                        const latency = 10 + Math.random() * (host.includes('google') ? 30 : 150);
+                        print(`Reply from ${host}: time=${latency.toFixed(2)}ms`);
+                        count++;
+                    }, 1000);
+                }
+            },
+            'top': {
+                run: () => {
+                    print("=== CloverShell Task Manager (Simulasi) ===", "text-info");
+                    print("PID  USER   CPU%  MEM%  COMMAND", "text-warn");
+                    const processes = [
+                        { pid: 1, user: 'root', cmd: 'kernel_task' },
+                        { pid: 102, user: 'root', cmd: 'networkd' },
+                        { pid: 210, user: 'user', cmd: 'clovershell' },
+                        { pid: 215, user: 'user', cmd: 'browser_render' },
+                        { pid: 220, user: 'user', cmd: 'audio_service' },
+                    ];
+                    processes.forEach(p => {
+                        const cpu = (Math.random() * (p.cmd === 'clovershell' ? 8 : 2)).toFixed(1);
+                        const mem = (Math.random() * (p.cmd === 'clovershell' ? 5 : 3)).toFixed(1);
+                        print(`${p.pid.toString().padEnd(4)} ${p.user.padEnd(6)} ${cpu.padEnd(5)} ${mem.padEnd(5)} ${p.cmd}`);
+                    });
+                    print("\n--- Resources (Simulasi) ---", "text-warn");
+                    const totalRam = navigator.deviceMemory ? `${navigator.deviceMemory}GB` : "8.0GB";
+                    const usedRam = ((parseFloat(totalRam) * (0.4 + Math.random() * 0.2))).toFixed(1);
+                    const cpuLoad = (10 + Math.random() * 20).toFixed(1);
+                    print(`CPU Usage: ${cpuLoad}%`);
+                    print(`RAM Usage: ${usedRam}GB / ${totalRam}`);
+                    if (navigator.storage && navigator.storage.estimate) {
+                        navigator.storage.estimate().then(est => {
+                            const quota = (est.quota / 1024 / 1024 / 1024).toFixed(2);
+                            const usage = (est.usage / 1024 / 1024).toFixed(1);
+                            print(`Disk (VFS Quota): ${usage}MB / ${quota}GB`);
+                        });
+                    } else {
+                        print(`Disk (VFS): (N/A)`);
+                    }
+                }
+            },
+            'neofetch': {
+                run: () => {
+                    const os = navigator.platform || "Unknown OS";
+                    const isMobile = navigator.userAgentData ? navigator.userAgentData.mobile : (window.innerWidth < 768);
+                    const host = isMobile ? "Mobile Device" : "Desktop";
+                    const uptimeMs = new Date() - bootTime;
+                    const uptimeMin = Math.floor(uptimeMs / 60000);
+                    print(`     <span class="text-info">clover@root</span>`);
+                    print(`     <span class="text-info">-----------</span>`);
+                    print(` <span class="text-warn">OS:</span>       ${os}`);
+                    print(` <span class="text-warn">Host:</span>     ${host}`);
+                    print(` <span class="text-warn">Kernel:</span>   CloverShell v1.1`);
+                    print(` <span class="text-warn">Uptime:</span>   ${uptimeMin} minutes`);
+                    print(` <span class="text-warn">RAM (Sys):</span>  ${navigator.deviceMemory || 'N/A'} GB`);
+                    print(` <span class="text-warn">GPU:</span>      ${gpuInfo.slice(0, 30)}...`);
+                    print(` <span class="text-warn">VFS Size:</span> ${JSON.stringify(fileSystem).length} bytes`);
+                }
+            },
+            'sudo': {
+                run: (args) => {
+                    if(args[0] === 'on') {
+                        sudoMode = true;
+                        print("Sudo mode enabled.", "text-warn");
+                    } else if (args[0] === 'off') {
+                        sudoMode = false;
+                        print("Sudo mode disabled.");
+                    } else {
+                        print("Usage: sudo [on/off]", "text-warn");
+                    }
+                    updatePromptLabel();
+                }
+            },
+            'alias': {
+                run: (args) => {
+                    if(args.length === 0) {
+                        print("Current Aliases:", "text-info");
+                        for(const a in aliases) {
+                            print(`  ${a} = '${aliases[a]}'`);
+                        }
+                        return;
+                    }
+                    const [name, ...cmdParts] = args.join(' ').split('=');
+                    const cmd = cmdParts.join('=').replace(/'|"/g, '');
+                    if (name && cmd) {
+                        aliases[name.trim()] = cmd.trim();
+                        print(`Alias set: ${name} -> ${cmd}`, "text-success");
+                    } else {
+                        print("Usage: alias [nama='perintah']", "text-warn");
+                    }
+                }
+            },
+            'theme': {
+                run: (args) => {
+                    const themes = ['default', 'light', 'matrix'];
+                    if(!args[0]) {
+                        print(`Usage: theme [nama]`, "text-warn");
+                        print(`Available themes: ${themes.join(', ')}`);
+                        return;
+                    }
+                    const themeName = args[0].toLowerCase();
+                    if(themes.includes(themeName)) {
+                        document.body.className = `theme-${themeName}`;
+                        print(`Theme set to ${themeName}.`, "text-success");
+                    } else {
+                        print(`Error: Theme '${themeName}' not found.`, "text-error");
+                    }
+                }
+            },
+            'ip': { 
+                run: () => {
+                    print("Checking Network Configuration...", "text-system");
+                    const localIP = "192.168.1." + Math.floor(Math.random() * 200);
+                    print(`Local IP  : ${localIP} (Simulasi)`, "text-success");
+                    print("Fetching Public IP...", "text-system");
+                    fetch('https://api.ipify.org?format=json')
+                        .then(res => res.json())
+                        .then(data => print(`Public IP : ${data.ip} (Asli)`, "text-info"))
+                        .catch(() => print("Public IP : Offline/Blocked", "text-error"));
+                }
+            },
+            'batt': { 
+                run: () => {
+                    if ('getBattery' in navigator) {
+                        navigator.getBattery().then(batt => {
+                            const level = Math.round(batt.level * 100);
+                            const status = batt.charging ? "Charging ⚡" : "Discharging";
+                            let color = level > 20 ? "text-success" : "text-error";
+                            print(`Battery Level: ${level}% (Asli)`, color);
+                            print(`Status       : ${status}`);
+                        });
+                    } else {
+                        print("Battery API not supported on this device.", "text-error");
+                    }
+                }
+            },
+            'time': { run: () => { print(new Date().toString(), "text-info"); } },
+            'temp': { 
+                run: () => {
+                    print("Reading thermal sensors (Simulasi)...", "text-system");
+                    setTimeout(() => {
+                        const cpu = 40 + Math.random() * 20;
+                        const gpu = 45 + Math.random() * 15;
+                        print(`CPU Temp: ${cpu.toFixed(1)}°C`);
+                        print(`GPU Temp: ${gpu.toFixed(1)}°C`);
+                        if (cpu > 55) print("Warning: High Load detected.", "text-warn");
+                    }, 800);
+                }
+            },
+            'net': { 
+                run: () => {
+                    print("Scanning WiFi networks (Simulasi)...", "text-system");
+                    const wifis = [
+                        {name: "Home_Network", db: -40, sec: "WPA2"}, {name: "Office_Guest", db: -65, sec: "WPA2"},
+                        {name: "Free_Wifi", db: -80, sec: "Open"}, {name: "Hidden_Net", db: -50, sec: "WPA3"}
+                    ];
+                    setTimeout(() => {
+                        print("SSID             SIGNAL   SECURITY", "text-warn");
+                        wifis.forEach(w => {
+                            let pad = "                 ".substring(w.name.length);
+                            print(`${w.name}${pad}${w.db}dBm   ${w.sec}`);
+                        });
+                    }, 1000);
+                }
+            },
+            'apps': { 
+                run: () => {
+                    print("Software Version Check:", "text-info");
+                    print(`CloverShell Core : v1.1`);
+                    print(`Browser Agent    : ${navigator.userAgent.slice(0, 50)}...`);
+                    print(`Platform         : ${navigator.platform}`);
+                    print(`Language         : ${navigator.language}`);
+                }
+            }
+        };
+
+        // --- 5. INPUT HANDLING ---
+        inputField.addEventListener('keydown', (e) => {
+            if (e.key === 'Tab') {
+                e.preventDefault();
+                const val = inputField.value;
+                if (!val) return;
+                const currentDir = getCurrentDirObj();
+                const allCmds = Object.keys(commands);
+                const allFiles = Object.keys(currentDir);
+                const possibilities = [...allCmds, ...allFiles];
+                const matches = possibilities.filter(item => item.startsWith(val));
+                if (matches.length === 1) {
+                    inputField.value = matches[0] + " ";
+                } else if (matches.length > 1) {
+                    print(`${promptLabel.innerText} ${val}`, "text-cmd");
+                    print(matches.join("  "), "text-system");
+                }
+                return;
+            }
+
+            if (e.key === 'Enter') {
+                let val = inputField.value.trim();
+                if (!val) return;
+
+                const firstWord = val.split(' ')[0].toLowerCase();
+                if (aliases[firstWord]) {
+                    val = val.replace(firstWord, aliases[firstWord]);
+                }
+
+                print(`${promptLabel.innerText} ${val}`, "text-cmd");
+                
+                commandHistory.push(val);
+                historyIndex = commandHistory.length;
+
+                const parts = val.match(/(?:[^\s"]+|"[^"]*")+/g).map(s => s.replace(/"/g, '')); 
+                const cmdName = parts[0].toLowerCase();
+                const args = parts.slice(1);
+
+                if (commands[cmdName]) {
+                    try {
+                        commands[cmdName].run(args);
+                    } catch (err) {
+                        print(`System Error: ${err.message}`, "text-error");
+                    }
+                } else {
+                    print(`Command '${cmdName}' not found. Type 'help'.`, "text-error");
+                }
+
+                inputField.value = '';
+                scrollToBottom();
+            }
+            else if (e.key === 'ArrowUp') {
+                e.preventDefault();
+                if(historyIndex > 0) {
+                    historyIndex--;
+                    inputField.value = commandHistory[historyIndex];
+                }
+            }
+            else if (e.key === 'ArrowDown') {
+                e.preventDefault();
+                if(historyIndex < commandHistory.length - 1) {
+                    historyIndex++;
+                    inputField.value = commandHistory[historyIndex];
+                } else {
+                    historyIndex = commandHistory.length;
+                    inputField.value = '';
+                }
+            }
+        });
+
+        // --- 6. ANIMASI BOOTING ---
+        function bootSequence() {
+            const logs = [
+                "Initializing CloverShell Kernel v1.1...",
+                "Mounting VFS (Virtual File System)...",
+                "Checking Permissions...",
+                "Loading Drivers: [Network, Battery, Display, WebGL]...",
+                "System Ready."
+            ];
+            
+            let delay = 0;
+            logs.forEach((log, i) => {
+                delay += 300 + Math.random() * 400;
+                setTimeout(() => {
+                    print(log, "text-system");
+                    if (i === logs.length - 1) {
+                        print("<br>Welcome to <b>CloverShell v1.1</b>.", "text-success");
+                        print("Type 'help' to see available commands.<br>");
+                        updatePromptLabel();
+                    }
+                }, delay);
+            });
+        }
+    </script>
+</body>
+</html>
